@@ -1,0 +1,188 @@
+services:
+  mysql84:
+    image: mysql:8.4
+    container_name: mysql84
+    ports:
+      - "33840:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      TZ: Asia/Shanghai
+    restart: unless-stopped  
+    volumes:
+      - /docker/data/mysql/8.4/log:/var/log/mysql
+      - /docker/data/mysql/8.4/data:/var/lib/mysql
+      - /docker/data/mysql/8.4/conf:/etc/mysql/conf.d
+    networks:
+      - my_network
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_general_ci
+    deploy: # 限制资源
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+  mysql57:
+    image: mysql:5.7
+    container_name: mysql57
+    ports:
+      - "3357:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      TZ: Asia/Shanghai
+    restart: unless-stopped
+    volumes:
+      - /docker/data/mysql/5.7/data:/var/lib/mysql
+      - /docker/data/mysql/5.7/conf:/etc/mysql/conf.d
+    networks:
+      - my_network
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_general_ci
+    deploy: # 限制资源
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+  mariadb103:
+    image: mariadb:10.3
+    container_name: mariadb103
+    ports:
+      - "43103:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      TZ: Asia/Shanghai
+    restart: unless-stopped
+    volumes:
+      - /docker/data/mariadb/10.3/data:/var/lib/mysql
+      - /docker/data/mariadb/10.3/conf:/etc/mysql/conf.d
+    networks:
+      - my_network
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_general_ci
+    deploy: #资源限制
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  myredis:
+    image: redis:7.2.5-alpine
+    container_name: myredis
+    ports:
+      - "6379:6379"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ./redis/redis-cn.conf:/etc/redis/redis.conf
+      - ./redis/data:/data
+    command: ["redis-server", "/etc/redis/redis.conf"]  # 使用挂载的配置文件启动 Redis
+    restart: unless-stopped
+    networks:
+      - my_network
+    deploy: # 限制资源
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+  
+  # ==========================================
+  # PHP 7.3 服务 (定制扩展)
+  # ==========================================
+  php73:
+    build:
+      context: ./services/php
+      dockerfile: Dockerfile
+      args:
+        PHP_VERSION: 7.3.33
+        # 在这里指定 7.3 独有的扩展列表，用空格隔开
+        PHP_EXTENSIONS: bcmath gd gettext intl mysqli pcntl pdo_mysql redis shmop soap sockets sysvsem xmlrpc xsl zip xdebug @composer
+    container_name: x-php73
+    hostname: phpfpm-73x 
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      # 挂载 PHP 配置
+      - ./services/php/7.3.33/php7333.ini:/usr/local/etc/php/php.ini
+      # 通用php代码放置点
+      - /home/htdocs:/home/wwwroot/htdocs:rw
+    networks:
+      - my_network
+    # 如果你的 WebSocket 服务 (50001端口) 是在这个容器里通过 PHP 命令行启动的，需要暴露端口
+    ports:
+      - "50001:50001"
+      - "50002:50002"
+    deploy: # 限制资源
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
+  # ==========================================
+  # PHP 8.0 服务
+  # ==========================================
+  php80:
+    build:
+      context: ./services/php
+      dockerfile: Dockerfile
+      args:
+        PHP_VERSION: 8.0.30
+        #常用扩展
+        PHP_EXTENSIONS: bcmath gd gettext intl mysqli pcntl pdo_mysql redis shmop soap sockets sysvsem xmlrpc xsl zip swoole @composer
+    container_name: x-php80
+    hostname: phpfpm-80x
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      # 1. 代码目录 (必须与 Nginx 保持一致)
+      # 通用php代码放置点
+      - /home/htdocs:/home/wwwroot/htdocs:rw
+      # 2. 配置文件
+      - ./services/php/8.0.30/php80.ini:/usr/local/etc/php/php.ini
+      # 3. 手动挂载 swoole_loader (路径通常如下，建议进入容器用 php -i | grep extension_dir 确认)
+      # - ./services/php/8.0.30/extensions/swoole_loader80.so:/usr/local/lib/php/extensions/no-debug-non-zts-20200930/swoole_loader80.so
+    networks:
+      - my_network
+    ports:
+      - "2026:2026"
+    deploy: # 限制资源
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+  # ==========================================
+  # Nginx 服务
+  # ==========================================
+  nginx:
+    image: nginx:alpine
+    container_name: x-nginx
+    restart: unless-stopped
+    depends_on:
+      - php73
+      - php80
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # 1. 站点配置
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      # 2. SSL 证书 (根据你的旧路径)
+      # - /docker/lnp/nginx/ssl:/usr/local/nginx/conf/ssl
+      # 3. 日志
+      - /docker/program-service/wwwlogs:/home/wwwlogs
+      # 4. [关键] 代码目录必须挂载，Nginx 需要读取静态文件(html/js/css)
+      - /home/htdocs:/home/wwwroot/htdocs:ro
+    networks:
+      - my_network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+networks:
+  my_network:
+    external: true
